@@ -175,9 +175,20 @@ class ClientTests {
       $state = $params['state'];
     }
 
+    $code_challenge = false;
+    $code_challenge_method = false;
+    if(array_key_exists('code_challenge', $params)) {
+      $code_challenge = $params['code_challenge'];
+      if(array_key_exists('code_challenge_method', $params)) {
+        $code_challenge_method = $params['code_challenge_method'];
+      } else {
+        $code_challenge_method = 'plain';
+      }
+    }
+
     // Generate a JWT with all of this data so that we can avoid re-checking it when the ALLOW button is pressed
     if(count($errors) == 0) {
-      $jwt = JWT::encode([
+      $jwt_data = [
         'type' => 'confirm',
         'scope' => $scope,
         'me' => $me,
@@ -186,7 +197,12 @@ class ClientTests {
         'state' => $state,
         'created_at' => time(),
         'exp' => time()+300
-      ], Config::$secret);
+      ];
+      if($code_challenge) {
+        $jwt_data['code_challenge'] = $code_challenge;
+        $jwt_data['code_challenge_method'] = $code_challenge_method;
+      }
+      $jwt = JWT::encode($jwt_data, Config::$secret);
     } else {
       $jwt = false;
     }
@@ -230,6 +246,15 @@ class ClientTests {
     $data->created_at = time();
     $data->exp = time()+60;
     $data->nonce = random_string(10);
+
+    // Pass along the code challenge details
+    if(isset($data->code_challenge)) {
+      // It's already in the object, so we don't need to do anything explicitly,
+      // but if we were building a new array it would look like:
+      // $new_data['code_challenge'] = $data->code_challenge;
+      // $new_data['code_challenge_method'] = $data->code_challenge_method;
+    }
+
     $code = JWT::encode($data, Config::$secret);
 
     // Build the redirect URI
@@ -314,6 +339,41 @@ class ClientTests {
         'error' => 'invalid_grant',
         'error_description' => 'The redirect_uri in this request did not match the redirect_uri that was used to generate this authorization code'
       ])->withStatus(400);
+    }
+
+    // Verify PKCE code verifier if code challenge is present
+    if(isset($data->code_challenge)) {
+      if(!isset($params['code_verifier'])) {
+        return $this->_conneg_response($request, $response, [
+          'error' => 'invalid_grant',
+          'error_description' => 'A code_verifier must be provided since the authorization request included a code_challenge'
+        ])->withStatus(400);
+      }
+
+      $code_verifier = $params['code_verifier'];
+      $code_challenge_method = isset($data->code_challenge_method) ? $data->code_challenge_method : 'plain';
+
+      if($code_challenge_method == 'plain') {
+        if($code_verifier !== $data->code_challenge) {
+          return $this->_conneg_response($request, $response, [
+            'error' => 'invalid_grant',
+            'error_description' => 'The code_verifier did not match the code_challenge'
+          ])->withStatus(400);
+        }
+      } elseif($code_challenge_method == 'S256') {
+        $expected_challenge = base64_urlencode(hash('sha256', $code_verifier, true));
+        if($expected_challenge !== $data->code_challenge) {
+          return $this->_conneg_response($request, $response, [
+            'error' => 'invalid_grant',
+            'error_description' => 'The code_verifier did not match the code_challenge'
+          ])->withStatus(400);
+        }
+      } else {
+        return $this->_conneg_response($request, $response, [
+          'error' => 'invalid_grant',
+          'error_description' => 'Unsupported code_challenge_method'
+        ])->withStatus(400);
+      }
     }
 
     $token = ORM::for_table('client_access_tokens')->create();

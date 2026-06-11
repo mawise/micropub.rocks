@@ -61,6 +61,10 @@ function random_string($len) {
   return $str;
 }
 
+function base64_urlencode($string) {
+  return rtrim(strtr(base64_encode($string), '+/', '-_'), '=');
+}
+
 // Sets up the session.
 // If create is true, the session will be created even if there is no cookie yet.
 // If create is false, the session will only be set up in PHP if they already have a session cookie.
